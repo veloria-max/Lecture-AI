@@ -127,8 +127,6 @@ input,select,textarea{font:inherit}
 .auth-card .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
 .prov{width:100%;margin-bottom:10px;justify-content:center;padding:12px}
 .prov .g{width:20px;height:20px;display:grid;place-items:center;font-weight:800;font-size:12px;border-radius:5px;background:var(--chip)}
-.calnote{font-size:12.5px;color:var(--muted);text-align:center;margin:4px 0 14px}
-.calnote a{color:var(--brand);cursor:pointer;font-weight:600}
 .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:16px 0}
 .divider::before,.divider::after{content:"";height:1px;background:var(--line);flex:1}
 .field{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);

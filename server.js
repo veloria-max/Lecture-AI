@@ -7,12 +7,11 @@
  * are to the Claude API (when a key is set) and free image sources for slides.
  *
  * Architecture:
- *   - All backend calls go through a SAME-SITE proxy at /forward/api/v1/*.
+ *   - All backend calls go through a SAME-SITE proxy at /api/*.
  *   - CSRF: GET /login_csrf sets a readable `csrftoken` cookie; the SPA echoes
- *     it as `x-csrftoken` and always sends `x-source: lecturenotes-web`. The proxy
+ *     it as `x-csrftoken` and always sends `x-client: lecturenotes-web`. The proxy
  *     rejects mismatches on mutating requests.
  *   - Session auth via an HttpOnly `sessionid` cookie (OAuth-style or email).
- *   - Feature flags at /v1/initialize and a /otel-token telemetry bootstrap.
  *   - Live transcription over a WebSocket at /ws/transcribe.
  *
  * Run:  node server.js   ->  http://localhost:4178
@@ -25,7 +24,12 @@ const fs = require('fs');
 const path = require('path');
 const { USER, CONVERSATIONS, CHANNELS, LIVE_SCRIPT } = require('./data.js');
 
-const PORT = 4178;
+const PORT = Number(process.env.PORT) || 4178;
+// Listen only on this computer by default. Anyone else on the same Wi-Fi could
+// otherwise use your Claude key and read or delete lectures. Set HOST=0.0.0.0
+// only behind real authentication (e.g. the future hosted version).
+const HOST = process.env.HOST || '127.0.0.1';
+const LOCAL_ONLY = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // -------------------------------------------------- Claude (Phase 4) ----
@@ -220,20 +224,52 @@ ${transcript}
 }
 
 // ---------------------------------------------------------------- state ----
-const sessions = new Map();     // sessionid -> { user }
-const magicLinks = new Map();   // token -> email
+const sessions = new Map();     // sessionid -> { user, t }
+const magicLinks = new Map();   // token -> { email, t }
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000;
+const MAX_SESSIONS = 1000;
+
+// Simple per-session rate limit for the routes that spend Claude credits, so one
+// client (or a runaway loop) can't drain the key.
+const RATE_WINDOW_MS = 60 * 1000, RATE_MAX = 20;
+const rateHits = new Map(); // sessionid -> [timestamps]
+function rateLimited(sid) {
+  const now = Date.now();
+  const hits = (rateHits.get(sid) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  if (hits.length >= RATE_MAX) { rateHits.set(sid, hits); return true; }
+  hits.push(now); rateHits.set(sid, hits);
+  if (rateHits.size > MAX_SESSIONS * 2) rateHits.delete(rateHits.keys().next().value);
+  return false;
+}
+
+// Clean and bound transcript segments coming from the browser before storing them.
+function cleanSegments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 20000).filter((x) => x && typeof x === 'object' && typeof x.text === 'string').map((x) => ({
+    t: Number.isFinite(Number(x.t)) ? Math.max(0, Math.min(Number(x.t), 24 * 3600)) : 0,
+    speaker: String(x.speaker || 'You').slice(0, 60),
+    text: x.text.slice(0, 5000),
+  }));
+}
+
+// Block DNS-rebinding: when running locally, only answer requests addressed to
+// this machine by name, so a malicious website can't talk to the server.
+function hostAllowed(req) {
+  if (!LOCAL_ONLY) return true;
+  const h = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+}
+function originAllowed(req) {
+  const o = req.headers.origin;
+  if (!o) return true; // same-origin navigations and non-browser clients
+  try { const u = new URL(o); return LOCAL_ONLY ? (u.hostname === 'localhost' || u.hostname === '127.0.0.1') : u.host === req.headers.host; } catch { return false; }
+}
 let convos = JSON.parse(JSON.stringify(CONVERSATIONS)); // mutable copy
 
-const FLAGS = {
-  passwordless_email_login: 'enabled',
-  live_transcription_ws: 'enabled',
-  ask_ai_panel: 'enabled',
-};
-
 const AUTH_PROVIDERS = [
-  { id: 'google', label: 'Continue with Google', sdk: 'Google sign-in' },
-  { id: 'microsoft', label: 'Continue with Microsoft', sdk: 'Microsoft sign-in' },
-  { id: 'apple', label: 'Continue with Apple', sdk: 'Apple sign-in' },
+  { id: 'google', label: 'Continue with Google' },
+  { id: 'microsoft', label: 'Continue with Microsoft' },
+  { id: 'apple', label: 'Continue with Apple' },
 ];
 
 // --------------------------------------------------------------- helpers ----
@@ -276,7 +312,8 @@ function makeUser(email, provider) {
 }
 function login(res, user) {
   const sid = crypto.randomBytes(24).toString('hex');
-  sessions.set(sid, { user });
+  sessions.set(sid, { user, t: Date.now() });
+  if (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
   return { 'set-cookie': `sessionid=${sid}; Path=/; HttpOnly; SameSite=Lax` };
 }
 function cannedAnswer(convo, q) {
@@ -297,15 +334,15 @@ function cannedAnswer(convo, q) {
 // --------------------------------------------------------- API (proxy) ----
 async function handleApi(req, res, url) {
   const cookies = parseCookies(req);
-  const route = url.pathname.replace('/forward/api/v1', '') || '/';
+  const route = url.pathname.replace('/api', '') || '/';
 
   if (route === '/login_csrf' && req.method === 'GET') {
     const token = crypto.randomBytes(24).toString('hex');
     return json(res, 200, { detail: 'ok' }, { 'set-cookie': `csrftoken=${token}; Path=/; SameSite=Lax` });
   }
 
-  if (req.headers['x-source'] !== 'lecturenotes-web')
-    return json(res, 400, { detail: 'missing or bad x-source header' });
+  if (req.headers['x-client'] !== 'lecturenotes-web')
+    return json(res, 400, { detail: 'missing or bad x-client header' });
 
   if (req.method !== 'GET') {
     const h = req.headers['x-csrftoken'];
@@ -322,23 +359,25 @@ async function handleApi(req, res, url) {
     const prov = AUTH_PROVIDERS.find((p) => p.id === b.provider);
     if (!prov) return json(res, 422, { detail: 'unknown provider' });
     const user = makeUser(`${b.provider}.user@example.com`, b.provider);
-    return json(res, 200, { user, note: `Simulated ${prov.label} (${prov.sdk}).` }, login(res, user));
+    return json(res, 200, { user, note: `Simulated ${prov.label} (local demo).` }, login(res, user));
   }
 
   if (route === '/login/email' && req.method === 'POST') {
     const b = await readBody(req);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email || '')) return json(res, 422, { detail: 'invalid email' });
     const token = crypto.randomBytes(16).toString('hex');
-    magicLinks.set(token, b.email);
+    magicLinks.set(token, { email: b.email, t: Date.now() });
+    for (const [k, v] of magicLinks) { if (Date.now() - v.t > MAGIC_LINK_TTL_MS) magicLinks.delete(k); }
     // Real app emails this link; here we return it so the demo can "click" it.
-    return json(res, 200, { detail: 'magic_link_sent', email: b.email, magic_link: `/forward/api/v1/login/verify?token=${token}` });
+    return json(res, 200, { detail: 'magic_link_sent', email: b.email, magic_link: `/api/login/verify?token=${token}` });
   }
 
   if (route === '/login/verify' && req.method === 'GET') {
     const token = url.searchParams.get('token');
-    const email = magicLinks.get(token);
-    if (!email) return json(res, 400, { detail: 'invalid or expired link' });
+    const link = magicLinks.get(token);
     magicLinks.delete(token);
+    if (!link || Date.now() - link.t > MAGIC_LINK_TTL_MS) return json(res, 400, { detail: 'invalid or expired link' });
+    const email = link.email;
     const user = makeUser(email, 'email');
     return json(res, 200, { user }, login(res, user));
   }
@@ -357,6 +396,9 @@ async function handleApi(req, res, url) {
   // ---- everything below requires a session ----
   const user = userFromReq(req);
   if (!user) return json(res, 401, { detail: 'authentication required' });
+
+  if (req.method === 'POST' && ['/summarize', '/ask_lecture', '/teaching_pack', '/slides'].includes(route) && rateLimited(cookies.sessionid))
+    return json(res, 429, { detail: 'Too many AI requests — wait a minute and try again.' });
 
   if (route === '/channels' && req.method === 'GET')
     return json(res, 200, { channels: CHANNELS });
@@ -517,47 +559,11 @@ async function handleApi(req, res, url) {
     return json(res, 200, result);
   }
 
-  // Home feed: GET /forward/api/v1/feed?modified_after=<unix-ts>
-  //   -> { last_load_ts, last_modified_at, speeches: [...], status }
-  // A recording is called a "speech". Data is placeholder demo data.
-  if (route === '/feed' && req.method === 'GET') {
-    const modifiedAfter = Number(url.searchParams.get('modified_after')) || 0;
-    const toSpeech = (c) => ({
-      speech_id: c.id,
-      title: c.title,
-      created_at: Math.floor(new Date(c.createdAt).getTime() / 1000),
-      start_time: Math.floor(new Date(c.createdAt).getTime() / 1000),
-      end_time: Math.floor(new Date(c.createdAt).getTime() / 1000) + c.durationSec,
-      duration: c.durationSec,
-      owner: { name: c.owner },
-      summary: c.summary || '',
-      speakers: (c.speakers || []).map((s, i) => ({ id: i + 1, name: s })),
-      has_photos: !!c.thumbnail,
-      process_finished: true,
-    });
-    const speeches = convos
-      .filter((c) => Math.floor(new Date(c.createdAt).getTime() / 1000) >= modifiedAfter)
-      .map(toSpeech);
-    return json(res, 200, {
-      last_load_ts: Math.floor(Date.now() / 1000),
-      last_modified_at: speeches.length ? speeches[0].created_at : 0,
-      speeches,
-      status: 'OK',
-    });
-  }
-
-  // A single speech (recording): /speech/<id>
-  const mSpeech = route.match(/^\/speech\/([^/]+)$/);
-  if (mSpeech && req.method === 'GET') {
-    const c = convos.find((x) => x.id === mSpeech[1]);
-    return c ? json(res, 200, { speech: c }) : json(res, 404, { detail: 'not found' });
-  }
-
-  // Create a speech from a REAL recorded transcript (segments captured from the
-  // mic in the browser). This is how the live mic recording is saved.
-  if (route === '/speeches' && req.method === 'POST') {
+  // Save a lecture from a REAL recorded transcript (segments captured in the
+  // browser). Segments are validated so stored data can't carry markup or junk.
+  if (route === '/lectures' && req.method === 'POST') {
     const b = await readBody(req);
-    const segments = Array.isArray(b.segments) ? b.segments : [];
+    const segments = cleanSegments(b.segments);
     const spk = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
     const palette = ['#f6a21e', '#7b3fe4', '#1e88e5', '#0a7d4d'];
     const text = segments.map((s) => s.text).join(' ');
@@ -566,9 +572,9 @@ async function handleApi(req, res, url) {
     const summary = segments.length ? sentences.slice(0, 2).join(' ') : '';
     const convo = {
       id: 'c_rec_' + crypto.randomBytes(4).toString('hex'),
-      title: b.title || 'Live Recording',
+      title: String(b.title || 'Live Recording').slice(0, 200),
       createdAt: new Date().toISOString().slice(0, 19),
-      durationSec: Number(b.durationSec) || (segments.length ? Math.ceil(segments[segments.length - 1].t) : 0),
+      durationSec: Math.max(0, Math.min(Number(b.durationSec) || (segments.length ? Math.ceil(segments[segments.length - 1].t) : 0), 24 * 3600)),
       owner: USER.name,
       speakers: spk,
       speakerColors: Object.fromEntries(spk.map((s, i) => [s, palette[i % palette.length]])),
@@ -579,11 +585,11 @@ async function handleApi(req, res, url) {
       actionItems: [],
     };
     convos.unshift(convo);
-    return json(res, 200, { speech_id: convo.id });
+    return json(res, 200, { id: convo.id });
   }
 
-  if (route === '/conversations' && req.method === 'GET') {
-    return json(res, 200, { conversations: convos.map((c) => ({
+  if (route === '/lectures' && req.method === 'GET') {
+    return json(res, 200, { lectures: convos.map((c) => ({
       id: c.id, title: c.title, createdAt: c.createdAt, durationSec: c.durationSec,
       owner: c.owner, speakers: c.speakers, speakerColors: c.speakerColors || {},
       thumbnail: c.thumbnail || null, summary: c.summary || '',
@@ -591,10 +597,10 @@ async function handleApi(req, res, url) {
     })) });
   }
 
-  const mConv = route.match(/^\/conversations\/([^/]+)$/);
+  const mConv = route.match(/^\/lectures\/([^/]+)$/);
   if (mConv && req.method === 'GET') {
     const c = convos.find((x) => x.id === mConv[1]);
-    return c ? json(res, 200, { conversation: c }) : json(res, 404, { detail: 'not found' });
+    return c ? json(res, 200, { lecture: c }) : json(res, 404, { detail: 'not found' });
   }
   if (mConv && req.method === 'DELETE') {
     const before = convos.length;
@@ -602,7 +608,7 @@ async function handleApi(req, res, url) {
     return json(res, convos.length < before ? 200 : 404, { detail: convos.length < before ? 'deleted' : 'not found' });
   }
 
-  const mAsk = route.match(/^\/conversations\/([^/]+)\/ask$/);
+  const mAsk = route.match(/^\/lectures\/([^/]+)\/ask$/);
   if (mAsk && req.method === 'POST') {
     const c = convos.find((x) => x.id === mAsk[1]);
     if (!c) return json(res, 404, { detail: 'not found' });
@@ -614,12 +620,6 @@ async function handleApi(req, res, url) {
 }
 
 // -------------------------------------------- other same-origin endpoints ----
-function handleOtelToken(res) {
-  return json(res, 200, { token: 'demo-' + crypto.randomBytes(8).toString('hex'), exp: 300 });
-}
-function handleFlagsInitialize(res) {
-  return json(res, 200, { has_updates: true, time: Date.now(), feature_gates: FLAGS });
-}
 
 // ------------------------------------------------- static file serving ----
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -628,26 +628,29 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 function serveStatic(res, urlPath) {
   const rel = urlPath === '/' ? '/index.html' : urlPath;
   const filePath = path.normalize(path.join(PUBLIC_DIR, rel));
-  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('forbidden'); }
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(403); return res.end('forbidden'); }
   fs.readFile(filePath, (err, buf) => {
     if (err) { if (!path.extname(filePath)) return serveStatic(res, '/'); res.writeHead(404); return res.end('not found'); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(filePath)] || 'application/octet-stream', 'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
+      'permissions-policy': 'camera=(), geolocation=()',
+    });
     res.end(buf);
   });
 }
 
 // ------------------------------------------------------------ HTTP server ----
 const server = http.createServer((req, res) => {
+  if (!hostAllowed(req)) { res.writeHead(421, { 'content-type': 'text/plain' }); return res.end('Misdirected request'); }
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
   // Catch any error from an async route so a single bad request can never take
   // the whole process down (which would drop every session and the in-memory key).
-  if (p.startsWith('/forward/api/v1')) return handleApi(req, res, url).catch((err) => {
+  if (p.startsWith('/api')) return handleApi(req, res, url).catch((err) => {
     console.warn('[api] route error', err && err.message);
     try { if (!res.headersSent) json(res, 500, { detail: 'server error' }); } catch {}
   });
-  if (p === '/otel-token') return handleOtelToken(res);
-  if (p === '/v1/initialize') return handleFlagsInitialize(res);
   return serveStatic(res, p);
 });
 
@@ -686,7 +689,7 @@ function wsDecode(buf) {
 
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  if (url.pathname !== '/ws/transcribe') { socket.destroy(); return; }
+  if (url.pathname !== '/ws/transcribe' || !hostAllowed(req) || !originAllowed(req)) { socket.destroy(); return; }
   if (!userFromReq(req)) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
   const key = req.headers['sec-websocket-key'];
   socket.write(
@@ -732,6 +735,7 @@ server.on('upgrade', (req, socket) => {
   let acc = Buffer.alloc(0);
   socket.on('data', (chunk) => {
     acc = Buffer.concat([acc, chunk]);
+    if (acc.length > 64 * 1024) { clearInterval(timer); socket.destroy(); return; } // control messages are tiny
     let frame;
     while ((frame = wsDecode(acc))) {
       acc = frame.rest;
@@ -747,7 +751,7 @@ server.on('upgrade', (req, socket) => {
   socket.on('error', () => clearInterval(timer));
 });
 
-server.listen(PORT, () => {
-  console.log(`\n  LectureNotes:  http://localhost:${PORT}\n`);
-  console.log('  Sign in with any provider button or an email, then record / browse conversations.\n');
+server.listen(PORT, HOST, () => {
+  console.log(`\n  LectureNotes:  http://localhost:${PORT}${LOCAL_ONLY ? '' : `  (listening on ${HOST})`}\n`);
+  console.log('  Sign in with any provider button or an email, then record / browse lectures.\n');
 });

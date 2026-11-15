@@ -1,10 +1,10 @@
 'use strict';
 /* Service worker: caches the app shell so the app opens and runs offline.
    - App shell + static assets: cache-first (works with no network).
-   - API calls (/forward/api/v1, /v1/initialize, /otel-token): network-only;
+   - API calls (/api, /ws): network-only;
      offline, the app falls back to local IndexedDB data in app.js.
    Bump CACHE on each release so clients pick up new assets. */
-const CACHE = 'lecturenotes-v23';
+const CACHE = 'lecturenotes-v24';
 const SHELL = [
   '/',
   '/index.html',
@@ -37,9 +37,7 @@ self.addEventListener('activate', (e) => {
 });
 
 function isApi(url) {
-  return url.pathname.startsWith('/forward/api/v1') ||
-         url.pathname === '/v1/initialize' ||
-         url.pathname === '/otel-token' ||
+  return url.pathname.startsWith('/api/') ||
          url.pathname.startsWith('/ws/');
 }
 

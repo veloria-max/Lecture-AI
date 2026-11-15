@@ -20,6 +20,10 @@ Open <http://localhost:4178>. No `npm install` needed — Node standard library 
 
 Sign in with any provider button or an email (a simulated local login — no real accounts).
 
+By default the server only listens on this computer (`127.0.0.1`), so nobody else on your
+Wi-Fi can reach it or use your Claude key. Set `HOST` / `PORT` to change that, but only
+expose it to a network once real authentication is in place.
+
 ## Features
 
 - **Record** — capture a lecture from your microphone with a **big live transcript** and a
@@ -84,7 +88,7 @@ Recording, transcription, games and export all work **without** a key.
 ## Tech notes
 
 - `server.js` — Node `http` server: static files, a simulated same-site API
-  (`/forward/api/v1/*`) with CSRF + session cookies, a Claude proxy (`/summarize`,
+  (`/api/*`) with CSRF + session cookies, a Claude proxy (`/summarize`,
   `/ask_lecture`, `/teaching_pack`, `/claude_status`, `/claude_key`), and a demo
   WebSocket transcription stream. Hardened against crashes (input validation, a 500
   catch, process-level `uncaughtException`/`unhandledRejection` nets, an 8 MB body cap).
