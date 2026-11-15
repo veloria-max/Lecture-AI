@@ -1,0 +1,17 @@
+# Claude Code session data
+.claude/
+
+# Internal audit notes (not part of the product)
+PHASE45_AUDIT.md
+
+# Dependencies (this project has none, but just in case)
+node_modules/
+
+# Env / secrets — never commit your API key
+.env
+.env.*
+
+# Logs & OS cruft
+*.log
+.DS_Store
+Thumbs.db

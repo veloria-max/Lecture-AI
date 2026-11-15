@@ -1,0 +1,14 @@
+{
+  "name": "LectureNotes — record, transcribe, study",
+  "short_name": "LectureNotes",
+  "description": "Record lectures, get a live on-device transcript, and study with summaries adapted to your level.",
+  "start_url": "/?src=pwa#/home",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2b6cf6",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
