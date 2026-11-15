@@ -4,14 +4,14 @@
    - API calls (/api, /ws): network-only;
      offline, the app falls back to local IndexedDB data in app.js.
    Bump CACHE on each release so clients pick up new assets. */
-const CACHE = 'lecturenotes-v24';
+const CACHE = 'lecturenotes-v25';
 const SHELL = [
   '/',
   '/index.html',
-  '/app.js?v=26',
-  '/whisper.js?v=26',
-  '/styles.css?v=26',
-  '/db.js?v=26',
+  '/app.js?v=27',
+  '/whisper.js?v=27',
+  '/styles.css?v=27',
+  '/db.js?v=27',
   '/manifest.webmanifest',
   '/icon.svg',
   '/icon-maskable.svg',

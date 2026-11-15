@@ -22,7 +22,7 @@ const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { USER, CONVERSATIONS, CHANNELS, LIVE_SCRIPT } = require('./data.js');
+const { USER, CONVERSATIONS, LIVE_SCRIPT } = require('./data.js');
 
 const PORT = Number(process.env.PORT) || 4178;
 // Listen only on this computer by default. Anyone else on the same Wi-Fi could
@@ -400,9 +400,6 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && ['/summarize', '/ask_lecture', '/teaching_pack', '/slides'].includes(route) && rateLimited(cookies.sessionid))
     return json(res, 429, { detail: 'Too many AI requests — wait a minute and try again.' });
 
-  if (route === '/channels' && req.method === 'GET')
-    return json(res, 200, { channels: CHANNELS });
-
   // ---- Claude adaptive summaries (Phase 4) ----
   // Status: whether a key is configured (never returns the key itself).
   if (route === '/claude_status' && req.method === 'GET')
@@ -578,7 +575,6 @@ async function handleApi(req, res, url) {
       owner: USER.name,
       speakers: spk,
       speakerColors: Object.fromEntries(spk.map((s, i) => [s, palette[i % palette.length]])),
-      thumbnail: null,
       segments,
       summary,
       outline: segments.slice(0, 3).map((s) => ({ t: s.t, label: s.text.slice(0, 48) })),
@@ -592,7 +588,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, { lectures: convos.map((c) => ({
       id: c.id, title: c.title, createdAt: c.createdAt, durationSec: c.durationSec,
       owner: c.owner, speakers: c.speakers, speakerColors: c.speakerColors || {},
-      thumbnail: c.thumbnail || null, summary: c.summary || '',
+      summary: c.summary || '',
       preview: c.segments[0] ? c.segments[0].text : '', segmentCount: c.segments.length,
     })) });
   }
@@ -720,7 +716,6 @@ server.on('upgrade', (req, socket) => {
       owner: USER.name,
       speakers: spk,
       speakerColors: Object.fromEntries(spk.map((s, i) => [s, palette[i % palette.length]])),
-      thumbnail: null,
       segments: collected,
       summary: 'Live demo recording. ' + (collected.length
         ? 'The conversation covered how real-time segments stream in with speaker labels and timestamps, how pause/resume preserves context, and how a summary is generated on stop.'

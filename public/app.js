@@ -47,7 +47,6 @@ function dayHeader(iso) {
 
 // inline icons
 const ICON = {
-  bell: '<svg class="ic" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
   home: '<svg class="ic" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
   chat: '<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 20l4-3 4 3"/></svg>',
   compass: '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9l-2 5-4 2 2-5z"/></svg>',
@@ -103,7 +102,7 @@ const SEED_COURSES = [
   { id: 'crs_general', name: 'General', color: '#6b7280', createdAt: new Date().toISOString() },
 ];
 
-const state = { user: null, channels: [], courses: [], prefs: null, visualPrefs: {} };
+const state = { user: null, courses: [], prefs: null, visualPrefs: {} };
 
 // ---- Courses + preferences: load/cache from IndexedDB (offline-safe) ----
 async function loadCourses() {
@@ -195,7 +194,7 @@ function shell(active, bodyNode, opts = {}) {
   const navItem = (hash, icon, label) => `<a class="nav ${active === hash ? 'active' : ''}" href="${hash}">${icon}<span>${label}</span></a>`;
   const app = el(`<div class="app">
     <aside class="sb">
-      <div class="sb-top">${BRAND}<span class="bell">${ICON.bell}</span></div>
+      <div class="sb-top">${BRAND}</div>
       <div class="usercard">
         <div class="row"><div class="avatar" style="width:34px;height:34px;font-size:13px;background:${safeColor(u.color)}">${esc(u.avatar)}</div>
           <div style="min-width:0"><div class="nm">${esc(u.name)}</div><div class="em">${esc(u.email)}</div></div></div>
@@ -204,7 +203,7 @@ function shell(active, bodyNode, opts = {}) {
       ${navItem('#/record', ICON.mic, 'Record')}
       ${navItem('#/courses', ICON.book, 'Courses')}
       ${navItem('#/games', ICON.game, 'Games')}
-      ${navItem('#/chat', ICON.chat, 'AI Chat')}
+      ${navItem('#/chat', ICON.chat, 'Study Chat')}
       ${navItem('#/settings', ICON.gear, 'Study Prefs')}
       <div class="sb-group" id="g-cr"><div class="gh">${ICON.chev} Courses</div><div class="gitems">${courseItems}</div></div>
       <div class="sb-spacer"></div>
@@ -244,7 +243,6 @@ function lectureToCard(s) {
     owner: s.owner || 'You',
     speakers: s.speakers || [],
     speakerColors: s.speakerColors || {},
-    thumbnail: s.thumbnail || null,
     summary: s.summary || '',
     segmentCount: s.segmentCount || 0,
   };
@@ -255,7 +253,7 @@ function localToCard(l) {
   return {
     id: l.id, title: l.title, createdAt: l.createdAt, durationSec: l.durationSec,
     owner: l.owner || 'You', speakers: l.speakers || [], speakerColors: l.speakerColors || {},
-    thumbnail: null, summary: l.summary || '', segmentCount: (l.segments || []).length,
+    summary: l.summary || '', segmentCount: (l.segments || []).length,
     local: true, status: l.status || 'transcribed', courseId: l.courseId || null,
   };
 }
@@ -286,7 +284,7 @@ async function renderHome(query) {
   if (!online) feed.appendChild(el(`<div class="offline-banner">● Offline — showing lectures saved on this device. Recording & transcription still work; summaries sync when you’re back online.</div>`));
   if (query) feed.appendChild(el(`<div class="feed-head"><span class="datehdr">Results for “${esc(query)}”</span></div>`));
   groups.forEach((g, gi) => {
-    feed.appendChild(el(`<div class="feed-head"><span class="datehdr">${esc(g.header)} ${ICON.chev}</span>${gi === 0 && !query ? `<span class="foryou">For you ${ICON.chev}</span>` : ''}</div>`));
+    feed.appendChild(el(`<div class="feed-head"><span class="datehdr">${esc(g.header)} ${ICON.chev}</span></div>`));
     g.items.forEach((c) => feed.appendChild(convCard(c)));
   });
   if (!convos.length) feed.appendChild(el(`<div class="empty">${query ? 'No lectures match “' + esc(query) + '”.' : 'No lectures yet. Press Record to start.'}</div>`));
@@ -308,7 +306,7 @@ function convCard(c) {
       ${c.summary ? `<div class="sum">${esc(c.summary)}</div>${long ? '<span class="showmore">Show more</span>' : ''}` : ''}
       ${c.speakers && c.speakers.length > 1 ? `<div class="spk">${spk}</div>` : ''}
     </div>
-    ${c.thumbnail ? `<div class="thumb"><div class="play">${ICON.play}</div></div>` : ''}
+    
   </div>`);
   card.onclick = () => (location.hash = '#/c/' + c.id);
   return card;
@@ -530,8 +528,8 @@ async function renderDetail(id) {
       <div class="panel"><div class="ph">Transcript<div class="sp"></div><div class="mini-search">${ICON.search}<input id="tq" placeholder="Search transcript"></div></div><div class="pb" id="transcript"></div></div>
       <div class="panel"><div class="tabs" id="tabs">
         <div class="tab active" data-tab="summary">${isProf ? 'Teaching' : 'Summary'}</div>
-        <div class="tab" data-tab="outline">Outline</div>
-        <div class="tab" data-tab="actions">Action items</div>
+        <div class="tab" data-tab="outline">Key moments</div>
+        <div class="tab" data-tab="actions">To-dos</div>
         <div class="tab" data-tab="visuals">Visuals</div>
         <div class="tab" data-tab="play">Play</div>
         <div class="tab" data-tab="ask">Ask AI</div></div><div id="tabbody"></div></div>
@@ -573,8 +571,8 @@ async function renderDetail(id) {
   const tb = $('#tabbody', body);
   const views = {
     summary: () => (isProf ? teachingView(c, isLocal, () => setTab('summary')) : studyView(c, isLocal, () => setTab('summary'))),
-    outline: () => { const d = el('<div class="pb"></div>'); if (!c.outline.length) d.appendChild(el('<span class="muted">No outline.</span>')); c.outline.forEach((o) => { const it = el(`<div class="outline-item"><span class="t">${fmtMMSS(o.t)}</span><span>${esc(o.label)}</span></div>`); it.onclick = () => { scrollT(o.t); seekTo(o.t); }; d.appendChild(it); }); return d; },
-    actions: () => { const d = el('<div class="pb"></div>'); if (!c.actionItems.length) d.appendChild(el('<span class="muted">No action items.</span>')); c.actionItems.forEach((a) => d.appendChild(el(`<div class="ai-item"><span class="own">${esc(a.owner)}</span><span>${esc(a.text)}</span></div>`))); return d; },
+    outline: () => { const d = el('<div class="pb"></div>'); if (!c.outline.length) d.appendChild(el('<span class="muted">No key moments yet.</span>')); c.outline.forEach((o) => { const it = el(`<div class="outline-item"><span class="t">${fmtMMSS(o.t)}</span><span>${esc(o.label)}</span></div>`); it.onclick = () => { scrollT(o.t); seekTo(o.t); }; d.appendChild(it); }); return d; },
+    actions: () => { const d = el('<div class="pb"></div>'); if (!c.actionItems.length) d.appendChild(el('<span class="muted">No to-dos.</span>')); c.actionItems.forEach((a) => d.appendChild(el(`<div class="ai-item"><span class="own">${esc(a.owner)}</span><span>${esc(a.text)}</span></div>`))); return d; },
     visuals: () => visualsTab(c, isLocal, () => setTab('visuals')),
     play: () => gamesView(c),
     ask: () => askPanel(c, isLocal),
@@ -1681,7 +1679,7 @@ function renderChat() {
   shell('#/chat', body);
   wireGlobalChat(body);
 }
-function askShell() { return `<div class="chat"><div class="log" id="log"><div class="bubble ai">Hi — I’m your AI Chat. Ask me about any of your lectures, e.g. “summarize the complex numbers lecture” or “what did the study group sync cover?”</div></div><div class="composer"><input class="field" id="q" style="margin:0" placeholder="Ask across your lectures…"><button class="btn brand" id="send">Send</button></div></div>`; }
+function askShell() { return `<div class="chat"><div class="log" id="log"><div class="bubble ai">Hi — I’m your Study Chat. Ask me about any of your lectures, e.g. “summarize the complex numbers lecture” or “what did the study group sync cover?”</div></div><div class="composer"><input class="field" id="q" style="margin:0" placeholder="Ask across your lectures…"><button class="btn brand" id="send">Send</button></div></div>`; }
 async function wireGlobalChat(body) {
   const { data } = await api('/lectures');
   const convos = data.lectures || [];
@@ -1714,7 +1712,6 @@ async function router() {
   const parts = hash.slice(2).split('/'); const route = '/' + (parts[0] || '');
   if (!state.user && route !== '/signin') { location.hash = '#/signin'; return; }
   if (state.user && route === '/signin') { location.hash = '#/home'; return; }
-  if (state.user && !state.channels.length) { try { state.channels = (await api('/channels')).data.channels || []; } catch {} }
   if (nav !== navSeq) return;  // a newer navigation started while we waited
   if (route === '/signin') return renderSignIn();
   if (route === '/home' || route === '/') return renderHome();
@@ -1740,7 +1737,6 @@ async function boot() {
   let me; try { me = await api('/me'); } catch { me = { status: 0 }; }
   if (me.status === 200) {
     state.user = me.data.user; cacheUser(state.user);
-    try { state.channels = (await api('/channels')).data.channels || []; } catch {}
   } else {
     // Offline / not reachable: fall back to the last signed-in user so on-device
     // lectures remain accessible without a fresh server login.
