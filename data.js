@@ -1,6 +1,6 @@
 'use strict';
 // Seeded in-memory demo data for the home feed (date-grouped
-// conversations with time, duration, owner, summary, speakers, thumbnail).
+// conversations with time, duration, owner, summary, speakers).
 
 function seg(t, speaker, text) { return { t, speaker, text }; }
 
@@ -15,7 +15,6 @@ const CONVERSATIONS = [
     owner: 'Sam',
     speakers: ['Sam'],
     speakerColors: { Sam: '#f6a21e' },
-    thumbnail: null,
     segments: [ seg(0.0, 'Sam', 'Quick voice note to self — remember to send the design review link before the sync.') ],
     summary: '',
     outline: [],
@@ -29,7 +28,6 @@ const CONVERSATIONS = [
     owner: 'Sam',
     speakers: ['Sam'],
     speakerColors: { Sam: '#f6a21e' },
-    thumbnail: null,
     segments: [
       seg(0.0, 'Sam', 'Today we are introducing complex numbers, starting from the imaginary unit i.'),
       seg(9.5, 'Sam', 'By definition i squared equals negative one, which has no real-number solution.'),
@@ -57,7 +55,6 @@ const CONVERSATIONS = [
     owner: 'Sam',
     speakers: ['Alex', 'Imani'],
     speakerColors: { Alex: '#f6a21e', Imani: '#7b3fe4' },
-    thumbnail: 'purple',
     segments: [
       seg(0.0, 'Alex', 'Thanks for hopping on. I wanted to plan how we split up the problem set.'),
       seg(6.8, 'Imani', 'Sure. I can take the complex-number questions; you take the proofs?'),
@@ -76,8 +73,6 @@ const CONVERSATIONS = [
   },
 ];
 
-const CHANNELS = [{ id: 'general', name: 'General' }];
-
 // Scripted "live" meeting used by the WebSocket recording demo.
 const LIVE_SCRIPT = [
   seg(0.0, 'You', 'Alright, this is a live demo of the transcription stream.'),
@@ -91,4 +86,4 @@ const LIVE_SCRIPT = [
   seg(32.5, 'Guest', 'Let’s stop here and see the summary.'),
 ];
 
-module.exports = { USER, CONVERSATIONS, CHANNELS, LIVE_SCRIPT };
+module.exports = { USER, CONVERSATIONS, LIVE_SCRIPT };

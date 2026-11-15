@@ -1,14 +1,14 @@
 'use strict';
 /* LectureNotes SPA. One API client -> same-site proxy
-   /forward/api/v1, csrftoken cookie echoed as x-csrftoken, fixed x-source
+   /api, csrftoken cookie echoed as x-csrftoken, fixed x-client
    header, session via HttpOnly cookie. */
 
-const API = '/forward/api/v1';
+const API = '/api';
 const X_SOURCE = 'lecturenotes-web';
 const getCookie = (n) => (document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)') || [, , ''])[2];
 
 async function api(pathname, { method = 'GET', body } = {}) {
-  const headers = { 'x-source': X_SOURCE };
+  const headers = { 'x-client': X_SOURCE };
   if (method !== 'GET') { headers['x-csrftoken'] = getCookie('csrftoken'); headers['content-type'] = 'application/json'; }
   const res = await fetch(API + pathname, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let data = {}; try { data = await res.json(); } catch {}
@@ -18,7 +18,9 @@ async function api(pathname, { method = 'GET', body } = {}) {
 const $ = (s, e = document) => e.querySelector(s);
 const $$ = (s, e = document) => [...e.querySelectorAll(s)];
 const el = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstElementChild; };
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Only allow plain colour values into inline styles (data may come from storage or the server).
+const safeColor = (c, fb = 'var(--avatar)') => (typeof c === 'string' && /^(#[0-9a-fA-F]{3,8}|var\(--[a-z-]+\))$/.test(c) ? c : fb);
 const root = () => $('#root');
 let toastTimer;
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 3000); }
@@ -45,7 +47,6 @@ function dayHeader(iso) {
 
 // inline icons
 const ICON = {
-  bell: '<svg class="ic" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
   home: '<svg class="ic" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
   chat: '<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 20l4-3 4 3"/></svg>',
   compass: '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9l-2 5-4 2 2-5z"/></svg>',
@@ -101,7 +102,7 @@ const SEED_COURSES = [
   { id: 'crs_general', name: 'General', color: '#6b7280', createdAt: new Date().toISOString() },
 ];
 
-const state = { user: null, flags: {}, channels: [], courses: [], prefs: null, visualPrefs: {} };
+const state = { user: null, courses: [], prefs: null, visualPrefs: {} };
 
 // ---- Courses + preferences: load/cache from IndexedDB (offline-safe) ----
 async function loadCourses() {
@@ -151,7 +152,6 @@ async function renderSignIn() {
     ${BRAND}
     <h2>Sign in</h2><p class="sub">Local demo — no real account or password is used.</p>
     <div id="provs"></div>
-    <div class="calnote">Why does LectureNotes need calendar access? <a id="why">Learn more</a></div>
     <div class="divider">or</div>
     <div id="emailArea"><button class="btn block" id="other">Other ways to log in</button></div>
     <p class="legal">Runs only on your machine. Local demo for testing.</p>
@@ -159,7 +159,6 @@ async function renderSignIn() {
   root().appendChild(page);
   const ph = $('#provs', page);
   providers.forEach((p) => { const b = el(`<button class="btn prov"><span class="g">${ig(p.id)}</span>Continue with ${esc(p.label.replace('Continue with ', ''))}</button>`); b.onclick = () => oauth(p, b); ph.appendChild(b); });
-  $('#why', page).onclick = () => toast('Calendar access lets LectureNotes see your classes and auto-join to record (simulated here).');
   $('#other', page).onclick = () => emailForm(page);
 }
 function emailForm(page) {
@@ -190,21 +189,21 @@ async function oauth(p, btn) {
 function shell(active, bodyNode, opts = {}) {
   root().innerHTML = '';
   const u = state.user;
-  const courseItems = (state.courses || []).map((c) => `<a class="sb-item" href="#/course/${c.id}"><span class="cdot" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:${c.color};margin-right:8px"></span>${esc(c.name)}</a>`).join('')
+  const courseItems = (state.courses || []).map((c) => `<a class="sb-item" href="#/course/${c.id}"><span class="cdot" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:${safeColor(c.color)};margin-right:8px"></span>${esc(c.name)}</a>`).join('')
     + `<a class="sb-item muted" id="sb-newcourse" style="cursor:pointer">＋ New course</a>`;
   const navItem = (hash, icon, label) => `<a class="nav ${active === hash ? 'active' : ''}" href="${hash}">${icon}<span>${label}</span></a>`;
   const app = el(`<div class="app">
     <aside class="sb">
-      <div class="sb-top">${BRAND}<span class="bell">${ICON.bell}</span></div>
+      <div class="sb-top">${BRAND}</div>
       <div class="usercard">
-        <div class="row"><div class="avatar" style="width:34px;height:34px;font-size:13px;background:${u.color || 'var(--avatar)'}">${esc(u.avatar)}</div>
+        <div class="row"><div class="avatar" style="width:34px;height:34px;font-size:13px;background:${safeColor(u.color)}">${esc(u.avatar)}</div>
           <div style="min-width:0"><div class="nm">${esc(u.name)}</div><div class="em">${esc(u.email)}</div></div></div>
       </div>
       ${navItem('#/home', ICON.home, 'Home')}
       ${navItem('#/record', ICON.mic, 'Record')}
       ${navItem('#/courses', ICON.book, 'Courses')}
       ${navItem('#/games', ICON.game, 'Games')}
-      ${navItem('#/chat', ICON.chat, 'AI Chat')}
+      ${navItem('#/chat', ICON.chat, 'Study Chat')}
       ${navItem('#/settings', ICON.gear, 'Study Prefs')}
       <div class="sb-group" id="g-cr"><div class="gh">${ICON.chev} Courses</div><div class="gitems">${courseItems}</div></div>
       <div class="sb-spacer"></div>
@@ -231,22 +230,21 @@ function shell(active, bodyNode, opts = {}) {
   gs.onkeydown = (e) => { if (e.key === 'Enter' && gs.value.trim()) location.hash = '#/search/' + encodeURIComponent(gs.value.trim()); };
 }
 
-function avatarFor(name, color) { return `<div class="avatar av" style="background:${color || 'var(--avatar)'}">${esc((name || '?').slice(0, 1).toUpperCase())}</div>`; }
+function avatarFor(name, color) { return `<div class="avatar av" style="background:${safeColor(color)}">${esc((name || '?').slice(0, 1).toUpperCase())}</div>`; }
 
 // ============================ HOME (feed) ============================
-// Map a "speech" (recording) object from /feed to a feed card.
-function speechToCard(s) {
+// Map a lecture summary object from GET /lectures to a feed card.
+function lectureToCard(s) {
   return {
-    id: s.speech_id,
+    id: s.id,
     title: s.title,
-    createdAt: new Date((s.start_time || s.created_at) * 1000).toISOString(),
-    durationSec: s.duration,
-    owner: (s.owner && s.owner.name) || 'You',
-    speakers: (s.speakers || []).map((x) => x.name),
-    speakerColors: {},
-    thumbnail: s.has_photos ? 'purple' : null,
+    createdAt: s.createdAt,
+    durationSec: s.durationSec,
+    owner: s.owner || 'You',
+    speakers: s.speakers || [],
+    speakerColors: s.speakerColors || {},
     summary: s.summary || '',
-    segmentCount: (s.speakers || []).length,
+    segmentCount: s.segmentCount || 0,
   };
 }
 
@@ -255,7 +253,7 @@ function localToCard(l) {
   return {
     id: l.id, title: l.title, createdAt: l.createdAt, durationSec: l.durationSec,
     owner: l.owner || 'You', speakers: l.speakers || [], speakerColors: l.speakerColors || {},
-    thumbnail: null, summary: l.summary || '', segmentCount: (l.segments || []).length,
+    summary: l.summary || '', segmentCount: (l.segments || []).length,
     local: true, status: l.status || 'transcribed', courseId: l.courseId || null,
   };
 }
@@ -266,8 +264,8 @@ async function renderHome(query) {
   // server feed (when online). Local entries win on id collision.
   let server = [], online = true;
   try {
-    const { status, data } = await api(`/feed?modified_after=0`);
-    if (status === 200) server = (data.speeches || []).map(speechToCard); else online = false;
+    const { status, data } = await api('/lectures');
+    if (status === 200) server = (data.lectures || []).map(lectureToCard); else online = false;
   } catch { online = false; }
   let local = [], localRaw = [];
   try { if (window.LDB && LDB.available()) { localRaw = await LDB.listLectures(); local = localRaw.map(localToCard); } } catch {}
@@ -286,20 +284,20 @@ async function renderHome(query) {
   if (!online) feed.appendChild(el(`<div class="offline-banner">● Offline — showing lectures saved on this device. Recording & transcription still work; summaries sync when you’re back online.</div>`));
   if (query) feed.appendChild(el(`<div class="feed-head"><span class="datehdr">Results for “${esc(query)}”</span></div>`));
   groups.forEach((g, gi) => {
-    feed.appendChild(el(`<div class="feed-head"><span class="datehdr">${esc(g.header)} ${ICON.chev}</span>${gi === 0 && !query ? `<span class="foryou">For you ${ICON.chev}</span>` : ''}</div>`));
+    feed.appendChild(el(`<div class="feed-head"><span class="datehdr">${esc(g.header)} ${ICON.chev}</span></div>`));
     g.items.forEach((c) => feed.appendChild(convCard(c)));
   });
-  if (!convos.length) feed.appendChild(el(`<div class="empty">${query ? 'No conversations match “' + esc(query) + '”.' : 'No conversations yet. Press Record to start.'}</div>`));
+  if (!convos.length) feed.appendChild(el(`<div class="empty">${query ? 'No lectures match “' + esc(query) + '”.' : 'No lectures yet. Press Record to start.'}</div>`));
   if (nav !== navSeq) return;  // user already navigated elsewhere
   shell('#/home', feed);
   const gs = $('#globalSearch'); if (gs && query) { gs.value = query; }
 }
 
 function convCard(c) {
-  const spk = (c.speakers || []).map((s) => `<div class="avatar av" style="background:${(c.speakerColors || {})[s] || 'var(--avatar)'}" title="${esc(s)}">${esc(s.slice(0, 1).toUpperCase())}</div>`).join('');
+  const spk = (c.speakers || []).map((s) => `<div class="avatar av" style="background:${safeColor((c.speakerColors || {})[s])}" title="${esc(s)}">${esc(s.slice(0, 1).toUpperCase())}</div>`).join('');
   const long = (c.summary || '').length > 180;
   const crs = c.courseId ? courseById(c.courseId) : null;
-  const crsChip = crs ? `<span class="course-chip" style="background:${crs.color}1f;color:${crs.color}"><span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:3px;background:${crs.color};margin-right:5px"></span>${esc(crs.name)}</span>` : '';
+  const crsChip = crs ? `<span class="course-chip" style="background:${safeColor(crs.color)}1f;color:${safeColor(crs.color)}"><span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:3px;background:${safeColor(crs.color)};margin-right:5px"></span>${esc(crs.name)}</span>` : '';
   const card = el(`<div class="conv">
     ${avatarFor(c.owner, c.owner === state.user.name ? state.user.color : null)}
     <div class="body">
@@ -308,7 +306,7 @@ function convCard(c) {
       ${c.summary ? `<div class="sum">${esc(c.summary)}</div>${long ? '<span class="showmore">Show more</span>' : ''}` : ''}
       ${c.speakers && c.speakers.length > 1 ? `<div class="spk">${spk}</div>` : ''}
     </div>
-    ${c.thumbnail ? `<div class="thumb"><div class="play">${ICON.play}</div></div>` : ''}
+    
   </div>`);
   card.onclick = () => (location.hash = '#/c/' + c.id);
   return card;
@@ -508,7 +506,7 @@ async function renderDetail(id) {
   // Local-first: load the on-device lecture if present, else the server copy.
   let c = null, isLocal = false;
   try { if (window.LDB && LDB.available()) { const loc = await LDB.getLecture(id); if (loc) { c = loc; isLocal = true; } } } catch {}
-  if (!c) { const { status, data } = await api('/conversations/' + id); if (status === 200) c = data.conversation; }
+  if (!c) { const { status, data } = await api('/lectures/' + id); if (status === 200) c = data.lecture; }
   if (!c) { toast('Lecture not found'); location.hash = '#/home'; return; }
   c.outline = c.outline || []; c.actionItems = c.actionItems || [];
 
@@ -530,8 +528,8 @@ async function renderDetail(id) {
       <div class="panel"><div class="ph">Transcript<div class="sp"></div><div class="mini-search">${ICON.search}<input id="tq" placeholder="Search transcript"></div></div><div class="pb" id="transcript"></div></div>
       <div class="panel"><div class="tabs" id="tabs">
         <div class="tab active" data-tab="summary">${isProf ? 'Teaching' : 'Summary'}</div>
-        <div class="tab" data-tab="outline">Outline</div>
-        <div class="tab" data-tab="actions">Action items</div>
+        <div class="tab" data-tab="outline">Key moments</div>
+        <div class="tab" data-tab="actions">To-dos</div>
         <div class="tab" data-tab="visuals">Visuals</div>
         <div class="tab" data-tab="play">Play</div>
         <div class="tab" data-tab="ask">Ask AI</div></div><div id="tabbody"></div></div>
@@ -544,7 +542,7 @@ async function renderDetail(id) {
     tHost.innerHTML = '';
     (c.segments || []).forEach((s) => {
       const hit = q && s.text.toLowerCase().includes(q.toLowerCase());
-      const node = el(`<div class="seg ${hit ? 'hit' : ''}" data-t="${s.t}" style="cursor:${audioURL ? 'pointer' : 'default'}"><div class="t">${fmtMMSS(s.t)}</div><div><div class="sp" style="flex:unset"><span class="dot" style="background:${(c.speakerColors || {})[s.speaker] || 'var(--brand)'}"></span><span class="who">${esc(s.speaker)}</span></div><div>${esc(s.text)}</div></div></div>`);
+      const node = el(`<div class="seg ${hit ? 'hit' : ''}" data-t="${Number(s.t) || 0}" style="cursor:${audioURL ? 'pointer' : 'default'}"><div class="t">${fmtMMSS(s.t)}</div><div><div class="sp" style="flex:unset"><span class="dot" style="background:${safeColor((c.speakerColors || {})[s.speaker], 'var(--brand)')}"></span><span class="who">${esc(s.speaker)}</span></div><div>${esc(s.text)}</div></div></div>`);
       if (audioURL) node.onclick = () => seekTo(s.t);
       tHost.appendChild(node);
     });
@@ -558,7 +556,7 @@ async function renderDetail(id) {
     if (isLocal && window.LDB) await LDB.deleteLecture(id);
     // A synced local lecture also has a server copy under a different id; delete both
     // so it doesn't reappear in the feed.
-    try { await api('/conversations/' + (c.serverId || id), { method: 'DELETE' }); } catch {}
+    try { await api('/lectures/' + (c.serverId || id), { method: 'DELETE' }); } catch {}
     toast('Deleted'); location.hash = '#/home';
   };
   // Export: download Markdown, copy Markdown, or print / save-as-PDF.
@@ -569,12 +567,12 @@ async function renderDetail(id) {
     catch { downloadText(safeFilename(c.title, '.md'), md, 'text/markdown'); toast('Clipboard blocked — downloaded instead.'); }
   };
   $('#print', body).onclick = () => { try { window.print(); } catch {} };
-  const scrollT = (t) => { const n = tHost.querySelector(`[data-t="${t}"]`); if (n) { n.scrollIntoView({ behavior: 'smooth', block: 'center' }); n.classList.add('hit'); setTimeout(() => n.classList.remove('hit'), 1400); } };
+  const scrollT = (t) => { const n = tHost.querySelector(`[data-t="${Number(t) || 0}"]`); if (n) { n.scrollIntoView({ behavior: 'smooth', block: 'center' }); n.classList.add('hit'); setTimeout(() => n.classList.remove('hit'), 1400); } };
   const tb = $('#tabbody', body);
   const views = {
     summary: () => (isProf ? teachingView(c, isLocal, () => setTab('summary')) : studyView(c, isLocal, () => setTab('summary'))),
-    outline: () => { const d = el('<div class="pb"></div>'); if (!c.outline.length) d.appendChild(el('<span class="muted">No outline.</span>')); c.outline.forEach((o) => { const it = el(`<div class="outline-item"><span class="t">${fmtMMSS(o.t)}</span><span>${esc(o.label)}</span></div>`); it.onclick = () => { scrollT(o.t); seekTo(o.t); }; d.appendChild(it); }); return d; },
-    actions: () => { const d = el('<div class="pb"></div>'); if (!c.actionItems.length) d.appendChild(el('<span class="muted">No action items.</span>')); c.actionItems.forEach((a) => d.appendChild(el(`<div class="ai-item"><span class="own">${esc(a.owner)}</span><span>${esc(a.text)}</span></div>`))); return d; },
+    outline: () => { const d = el('<div class="pb"></div>'); if (!c.outline.length) d.appendChild(el('<span class="muted">No key moments yet.</span>')); c.outline.forEach((o) => { const it = el(`<div class="outline-item"><span class="t">${fmtMMSS(o.t)}</span><span>${esc(o.label)}</span></div>`); it.onclick = () => { scrollT(o.t); seekTo(o.t); }; d.appendChild(it); }); return d; },
+    actions: () => { const d = el('<div class="pb"></div>'); if (!c.actionItems.length) d.appendChild(el('<span class="muted">No to-dos.</span>')); c.actionItems.forEach((a) => d.appendChild(el(`<div class="ai-item"><span class="own">${esc(a.owner)}</span><span>${esc(a.text)}</span></div>`))); return d; },
     visuals: () => visualsTab(c, isLocal, () => setTab('visuals')),
     play: () => gamesView(c),
     ask: () => askPanel(c, isLocal),
@@ -615,7 +613,7 @@ function askPanel(c, isLocal) {
       } else if (isLocal) {
         th.textContent = clientAnswer(c, q);
       } else {
-        const { data } = await api('/conversations/' + c.id + '/ask', { method: 'POST', body: { question: q } });
+        const { data } = await api('/lectures/' + c.id + '/ask', { method: 'POST', body: { question: q } });
         th.textContent = data.answer || clientAnswer(c, q);
       }
     } catch { th.textContent = clientAnswer(c, q); }
@@ -1022,8 +1020,8 @@ async function saveRecording(segs, audio, durationSec, title, courseId, slides) 
   let savedLocal = false, targetId = id;
   if (window.LDB && LDB.available()) { try { savedLocal = await LDB.putLecture(lecture); } catch { savedLocal = false; } }
   try {
-    const { status, data } = await api('/speeches', { method: 'POST', body: { title: lecture.title, durationSec, segments: segs } });
-    if (status === 200) { if (savedLocal) { lecture.synced = true; lecture.serverId = data.speech_id; try { await LDB.putLecture(lecture); } catch {} } else targetId = data.speech_id; }
+    const { status, data } = await api('/lectures', { method: 'POST', body: { title: lecture.title, durationSec, segments: segs } });
+    if (status === 200) { if (savedLocal) { lecture.synced = true; lecture.serverId = data.id; try { await LDB.putLecture(lecture); } catch {} } else targetId = data.id; }
     else if (!savedLocal) return { ok: false, reason: 'Save failed (offline, and local storage unavailable).' };
   } catch { if (!savedLocal) return { ok: false, reason: 'Offline and local storage unavailable — could not save.' }; }
   return { ok: true, targetId };
@@ -1032,7 +1030,8 @@ async function saveRecording(segs, audio, durationSec, title, courseId, slides) 
 function renderRecord() {
   const whisperOK = !!(window.Whisper && Whisper.supported());
   const hasMic = !!SpeechRec;
-  let engine = localStorage.getItem('ln_engine') || (hasMic ? 'browser' : (whisperOK ? 'whisper' : 'scripted'));
+  // Default to on-device Whisper (private, offline); the browser engine sends audio to an online service.
+  let engine = localStorage.getItem('ln_engine') || (whisperOK ? 'whisper' : (hasMic ? 'browser' : 'scripted'));
   if (engine === 'whisper' && !whisperOK) engine = hasMic ? 'browser' : 'scripted';
   if (engine === 'browser' && !hasMic) engine = whisperOK ? 'whisper' : 'scripted';
 
@@ -1642,7 +1641,7 @@ async function renderCourses() {
   try { if (window.LDB && LDB.available()) lectures = await LDB.listLectures(); } catch {}
   const count = (id) => lectures.filter((l) => lectureInCourse(l, id)).length;
   const cards = (state.courses || []).map((c) => `<div class="course-card" data-id="${c.id}">
-      <div class="course-top"><span class="cdot" style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${c.color}"></span><h3>${esc(c.name)}</h3></div>
+      <div class="course-top"><span class="cdot" style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${safeColor(c.color)}"></span><h3>${esc(c.name)}</h3></div>
       <div class="meta">${count(c.id)} lecture${count(c.id) === 1 ? '' : 's'}</div>
     </div>`).join('');
   const body = el(`<div class="feed">
@@ -1665,7 +1664,7 @@ async function renderCourse(id) {
   try { if (window.LDB && LDB.available()) lectures = await LDB.listLectures(); } catch {}
   const items = lectures.filter((l) => lectureInCourse(l, id)).map(localToCard);
   const feed = el(`<div class="feed">
-    <div class="feed-head"><span class="datehdr"><span class="cdot" style="display:inline-block;width:12px;height:12px;border-radius:4px;background:${course.color};margin-right:8px"></span>${esc(course.name)}</span>
+    <div class="feed-head"><span class="datehdr"><span class="cdot" style="display:inline-block;width:12px;height:12px;border-radius:4px;background:${safeColor(course.color)};margin-right:8px"></span>${esc(course.name)}</span>
       <button class="btn brand" id="crs-rec">${ICON.mic} Record for this course</button></div>
   </div>`);
   if (!items.length) feed.appendChild(el(`<div class="empty">No lectures in ${esc(course.name)} yet. Press “Record for this course” to add one.</div>`));
@@ -1680,10 +1679,10 @@ function renderChat() {
   shell('#/chat', body);
   wireGlobalChat(body);
 }
-function askShell() { return `<div class="chat"><div class="log" id="log"><div class="bubble ai">Hi — I’m your AI Chat. Ask me about any of your conversations, e.g. “summarize the complex numbers lecture” or “what did the study group sync cover?”</div></div><div class="composer"><input class="field" id="q" style="margin:0" placeholder="Ask across your conversations…"><button class="btn brand" id="send">Send</button></div></div>`; }
+function askShell() { return `<div class="chat"><div class="log" id="log"><div class="bubble ai">Hi — I’m your Study Chat. Ask me about any of your lectures, e.g. “summarize the complex numbers lecture” or “what did the study group sync cover?”</div></div><div class="composer"><input class="field" id="q" style="margin:0" placeholder="Ask across your lectures…"><button class="btn brand" id="send">Send</button></div></div>`; }
 async function wireGlobalChat(body) {
-  const { data } = await api('/conversations');
-  const convos = data.conversations || [];
+  const { data } = await api('/lectures');
+  const convos = data.lectures || [];
   const log = $('#log', body), input = $('#q', body);
   const add = (cls, t) => { const b = el(`<div class="bubble ${cls}"></div>`); b.textContent = t; log.appendChild(b); log.scrollTop = log.scrollHeight; return b; };
   const ask = async () => {
@@ -1695,8 +1694,8 @@ async function wireGlobalChat(body) {
     convos.forEach((c) => { const n = words(c.title).filter((w) => qw.has(w)).length; if (n > best) { best = n; target = c; } });
     target = target || convos[0];
     const th = add('ai', '…');
-    if (!target) { th.textContent = 'You have no conversations yet.'; return; }
-    const { data } = await api('/conversations/' + target.id + '/ask', { method: 'POST', body: { question: q } });
+    if (!target) { th.textContent = 'You have no lectures yet.'; return; }
+    const { data } = await api('/lectures/' + target.id + '/ask', { method: 'POST', body: { question: q } });
     th.textContent = `(${target.title}) ` + (data.answer || 'No answer.');
   };
   $('#send', body).onclick = ask; input.onkeydown = (e) => { if (e.key === 'Enter') ask(); };
@@ -1713,7 +1712,6 @@ async function router() {
   const parts = hash.slice(2).split('/'); const route = '/' + (parts[0] || '');
   if (!state.user && route !== '/signin') { location.hash = '#/signin'; return; }
   if (state.user && route === '/signin') { location.hash = '#/home'; return; }
-  if (state.user && !state.channels.length) { try { state.channels = (await api('/channels')).data.channels || []; } catch {} }
   if (nav !== navSeq) return;  // a newer navigation started while we waited
   if (route === '/signin') return renderSignIn();
   if (route === '/home' || route === '/') return renderHome();
@@ -1736,12 +1734,9 @@ async function boot() {
   // Guard every network call so the app still renders offline (SW serves the
   // shell; past lectures come from IndexedDB). Never let boot() reject.
   try { await api('/login_csrf'); } catch {}
-  fetch('/otel-token').catch(() => {});
-  try { state.flags = (await fetch('/v1/initialize').then((r) => r.json())).feature_gates || {}; } catch {}
   let me; try { me = await api('/me'); } catch { me = { status: 0 }; }
   if (me.status === 200) {
     state.user = me.data.user; cacheUser(state.user);
-    try { state.channels = (await api('/channels')).data.channels || []; } catch {}
   } else {
     // Offline / not reachable: fall back to the last signed-in user so on-device
     // lectures remain accessible without a fresh server login.
